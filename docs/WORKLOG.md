@@ -22,3 +22,30 @@ Each entry: what I decided / what Claude Code generated / what I corrected.
 
 **Corrected**
 - Nothing yet.
+## 2026-10-31 — Step 1: data layer and pricing rules
+
+**Decided**
+- Installment rules follow manual section 3.1 (min. R$50 up to 3x, R$80 for 4–6x,
+  R$100 for 7–12x), not the summary table in section 3.
+- Rules apply to new quotes only. Historical orders are shown as recorded, never
+  recalculated or "corrected": orders 9, 16 and 18 break the installment minimum
+  under both section 3 and 3.1, and orders 3 and 14 contain product 130, which is
+  now `coming_soon`. Both are flagged in the data quality report.
+- Order totals vs item sums are a warning, not an error: there is no price history,
+  so the comparison uses current prices.
+- Two active promotions for the same product: the highest discount wins
+  (deterministic; does not happen in the current data).
+- Products with contradicting brand in the description are kept and flagged
+  `description_reliable=False`; the agent should show only name and specs for them,
+  which also hides the spec contradictions in 137 (strings) and 142 (keys).
+- Switched from requirements.txt to uv + pyproject.toml: lockfile guarantees reproducible installs; pip fallback documented in the README.
+
+**Claude Code generated**
+- `data.py` (CSV loading, specs parsing, brand mismatch flag, quality report),
+  `pricing.py` (final price, PIX, max installments), pytest suite, pyproject/uv.lock, README.
+
+**Corrected**
+- Added the checks Claude Code missed: installment rule violations in historical
+  orders and orders referencing unreleased products.
+- Known limitation recorded: brand detection is a heuristic tuned to this catalog
+  (fixed brand and model lists), not a general detector.
