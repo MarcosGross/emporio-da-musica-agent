@@ -49,3 +49,40 @@ Each entry: what I decided / what Claude Code generated / what I corrected.
   orders and orders referencing unreleased products.
 - Known limitation recorded: brand detection is a heuristic tuned to this catalog
   (fixed brand and model lists), not a general detector.
+
+## 2026-11-01 — Step 2: agent tools as plain functions
+
+Branch: `feat/agent-tools`.
+
+**Decided**
+- Tools are plain Python functions returning JSON-serializable dicts with English
+  keys; no LangChain decorators yet. Data is loaded once (cached) so tool
+  signatures stay clean for the LLM schema in step 3.
+- `get_product` adds a sixth availability value, `ambiguous`, returning the
+  candidates instead of picking one (e.g. "Martin D-28" → 93 and 108).
+- Unavailable products (out_of_stock, discontinued, coming_soon) are returned
+  without prices, so the agent never quotes a price or promotion for something
+  that cannot be bought; prices only appear on the alternatives.
+- Alternatives: up to 3 sellable products of the same category, closest final
+  price first.
+- Price filters and installments use the final price (with promotion); PIX price
+  is reported separately.
+- Category filter accepts id, exact or partial name, or a close spelling;
+  "sopro" matches both wind categories. Unknown category → `unknown_category`
+  error listing the valid categories.
+- Free-text search requires every token in name, specs or description, and the
+  description only counts when `description_reliable`.
+- Order lookup (LGPD): contact is checked against the order's own customer.
+  Missing order, wrong contact, invalid id and empty contact return the exact same
+  error. Phone accepted with or without +55, but the area code (DDD) is required.
+  The response carries no name, e-mail, phone or customer_id.
+- Duplicated e-mail `bruno.martins@jmail.com` opens order 10 (owned by customer
+  11, whose e-mail it is) and nothing else; customer 43's phone does not open it.
+- Dates are returned as `YYYY-MM-DD` strings as recorded, never compared with today.
+
+**Claude Code generated**
+- `tools.py` (list_categories, search_products, get_product, get_order_status)
+  and `tests/test_tools.py` (37 tests; 71 in the suite).
+
+**Corrected**
+- Nothing yet.
