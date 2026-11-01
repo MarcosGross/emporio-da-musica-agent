@@ -85,4 +85,12 @@ Branch: `feat/agent-tools`.
   and `tests/test_tools.py` (37 tests; 71 in the suite).
 
 **Corrected**
-- Nothing yet.
+- Free-text search required every word to match: "violão bom para iniciante"
+  returned 0 products and "um violão iniciante" returned 1 instead of 3. Found
+  by testing realistic customer phrases after the 37 unit tests passed. Fixed by
+  removing Portuguese stopwords and ranking by number of matched words; added
+  regression tests.
+- Ranking introduced a side effect: a ukulele ranked 4th for "violão iniciante"
+  because it matched "iniciante". Added `matched_terms` and `full_match_total`
+  to the response; the tool docstring (step 3) will steer the model to the
+  category filter.
