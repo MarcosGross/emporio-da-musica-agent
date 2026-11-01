@@ -76,6 +76,40 @@ def test_unknown_category_returns_error():
     assert result["products"] == []
 
 
+def test_query_with_stopwords_and_extra_words_still_finds_products():
+    # Regression: AND matching returned 0 here although beginner guitars are in stock.
+    assert search_products(query="violão bom para iniciante")["total"] > 0
+
+
+def test_stopwords_do_not_change_results():
+    assert search_products(query="um violão iniciante")["total"] == search_products(query="violão iniciante")["total"]
+
+
+@pytest.mark.parametrize("query", ["xyz inexistente", "para um de"])
+def test_query_without_matching_terms_returns_nothing(query):
+    result = search_products(query=query)
+    assert result["total"] == 0 and result["products"] == []
+
+
+def test_query_ranks_by_matched_terms_then_price():
+    products = search_products(query="violão iniciante")["products"]
+    both = [p for p in products
+            if all(w in p.get("description", "").lower() for w in ("violão", "iniciante"))]
+    assert both
+    # products matching both terms come before those matching only "violão"
+    assert products[:len(both)] == both
+    prices = [p["final_price_brl"] for p in both]
+    assert prices == sorted(prices)
+
+
+def test_full_match_total_and_matched_terms():
+    result = search_products(query="violão iniciante")
+    assert result["full_match_total"] == 3
+    ukulele = next(p for p in result["products"] if p["id"] == 116)
+    assert ukulele["matched_terms"] == ["iniciante"]
+    assert result["products"][0]["matched_terms"] == ["violao", "iniciante"]
+
+
 def test_search_is_json_serializable():
     _roundtrip(search_products(category="Guitarras"))
 

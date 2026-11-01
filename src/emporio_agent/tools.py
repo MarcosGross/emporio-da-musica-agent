@@ -21,6 +21,10 @@ MAX_ALTERNATIVES = 3
 MAX_CANDIDATES = 10
 FUZZY_TOKEN_CUTOFF = 0.75
 
+# Compared after normalize_text, so "até" is stored as "ate".
+STOPWORDS = frozenset({"de", "da", "do", "para", "com", "um", "uma", "o", "a", "e",
+                       "que", "ate", "em", "no", "na"})
+
 ORDER_NOT_FOUND = {
     "found": False,
     "error": "order_not_found_or_contact_mismatch",
@@ -157,6 +161,11 @@ def _match_categories(category: str | int) -> list[int]:
                    for q in query.split())]
 
 
+def _query_terms(query: str) -> list[str]:
+    """Normalized query words without Portuguese stopwords, deduplicated."""
+    return list(dict.fromkeys(t for t in normalize_text(query).split() if t not in STOPWORDS))
+
+
 def _searchable_text(product: pd.Series) -> str:
     parts = [product["name"], *map(str, product["specs"].values())]
     if product["description_reliable"]:
@@ -168,8 +177,12 @@ def search_products(category: str | int | None = None, max_price: float | None =
                     min_price: float | None = None, query: str | None = None) -> dict:
     """Sellable products filtered by category, final price range and free text.
 
-    Sorted by final price (ascending), at most SEARCH_LIMIT items; `total`
-    is the number of matches before the limit.
+    With a query, a product needs at least one non-stopword term and results are
+    ranked by matched terms (desc), then final price (asc); without a query,
+    by final price. At most SEARCH_LIMIT items; `total` is the number of
+    matches before the limit and `full_match_total` how many of them match
+    every query term (equal to `total` without a query). Each item lists its
+    `matched_terms` (normalized, so "violão" appears as "violao").
     """
     products = _sellable_products()
     filters = {"category": category, "min_price": min_price, "max_price": max_price, "query": query}
@@ -179,22 +192,29 @@ def search_products(category: str | int | None = None, max_price: float | None =
         if not category_ids:
             return {"filters": filters, "error": "unknown_category",
                     "available_categories": list(_category_names().values()),
-                    "total": 0, "returned": 0, "products": []}
+                    "total": 0, "full_match_total": 0, "returned": 0, "products": []}
         products = products[products["category_id"].isin(category_ids)]
 
+    # Query terms each product matches; empty for every product when there is no query.
+    terms: list[str] = []
+    matched = {int(p["product_id"]): [] for _, p in products.iterrows()}
     if query:
-        tokens = normalize_text(query).split()
-        products = products[[all(t in _searchable_text(p) for t in tokens)
-                             for _, p in products.iterrows()]]
+        terms = _query_terms(query)
+        matched = {int(p["product_id"]): [t for t in terms if t in _searchable_text(p)]
+                   for _, p in products.iterrows()}
+        matched = {pid: hits for pid, hits in matched.items() if hits}
+        products = products[products["product_id"].isin(matched)]
 
-    items = [_product_item(p) for _, p in products.iterrows()]
+    items = [{**_product_item(p), "matched_terms": matched[int(p["product_id"])]} for _, p in products.iterrows()]
     if min_price is not None:
         items = [i for i in items if i["final_price_brl"] >= min_price]
     if max_price is not None:
         items = [i for i in items if i["final_price_brl"] <= max_price]
-    items.sort(key=lambda i: (i["final_price_brl"], i["id"]))
+    items.sort(key=lambda i: (-len(i["matched_terms"]), i["final_price_brl"], i["id"]))
+    full_match_total = sum(len(i["matched_terms"]) == len(terms) for i in items)
 
-    return {"filters": filters, "total": len(items), "returned": min(len(items), SEARCH_LIMIT),
+    return {"filters": filters, "total": len(items), "full_match_total": full_match_total,
+            "returned": min(len(items), SEARCH_LIMIT),
             "products": items[:SEARCH_LIMIT]}
 
 
