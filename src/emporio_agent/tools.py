@@ -246,13 +246,16 @@ def _find_products(name_or_id: str | int) -> pd.DataFrame:
 
 
 def _alternatives(product: pd.Series) -> list[dict]:
-    """Sellable products of the same category, closest in price first."""
+    """Sellable products of the same category: same string type first (when the
+    product has specs["strings"]), then closest in price within each group."""
     reference = float(final_price(product, store.active_promotion(_data(), int(product["product_id"]))).final_price)
+    strings = product["specs"].get("strings")
     same_category = _sellable_products()
     same_category = same_category[(same_category["category_id"] == product["category_id"])
                                   & (same_category["product_id"] != product["product_id"])]
     items = [_product_item(p) for _, p in same_category.iterrows()]
-    items.sort(key=lambda i: (abs(i["final_price_brl"] - reference), i["final_price_brl"]))
+    items.sort(key=lambda i: (strings is not None and i["specs"].get("strings") != strings,
+                              abs(i["final_price_brl"] - reference), i["final_price_brl"]))
     return items[:MAX_ALTERNATIVES]
 
 

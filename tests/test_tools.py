@@ -140,6 +140,15 @@ def test_product_96_out_of_stock_with_alternatives():
     assert gaps == sorted(gaps)
 
 
+@pytest.mark.parametrize("query", [96, "Giannini GF-3D"])
+def test_alternatives_keep_string_type(query):
+    # Regression: the steel-string 96 got the nylon Yamaha C70 (82) as an alternative.
+    alternatives = get_product(query)["alternatives"]
+    assert len(alternatives) == 3
+    assert all(a["specs"]["strings"] == "steel" for a in alternatives)
+    assert 82 not in {a["id"] for a in alternatives}
+
+
 @pytest.mark.parametrize("product_id, availability", [
     (136, "discontinued"),  # discontinued even though it has stock
     (113, "discontinued"),
