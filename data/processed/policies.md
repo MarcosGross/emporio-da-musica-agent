@@ -165,8 +165,7 @@ O canal de WhatsApp (67) 3321-4500 é o principal meio de atendimento remoto da 
 **Promoção expirada:** caso o cliente pergunte sobre uma promoção, verificar se ela encontra-se ativa no sistema. Se a promoção estiver vencida, informar com transparência e apresentar o preço atual. Nunca prometer um desconto que não está mais vigente.
 
 **Reclamação:** ouvir o cliente com empatia, registrar a reclamação e encaminhar para o responsável.
-
-**Prazo de retorno:** 24 horas úteis.
+Prazo de retorno: 24 horas úteis.
 
 ## 8. Garantia
 
