@@ -193,3 +193,57 @@ Branch: `feat/guardrails-evals`.
   questions from description and specs.
 - CLI exit message suggested `emporio-chat --thread`; fixed to
   `uv run emporio-chat --thread`.
+
+## 2026-11-02 — Step 4b: automated evals
+
+Branch: `feat/guardrails-evals`.
+
+**Decided**
+- Deterministic checks instead of an LLM judge: tools called (with expected
+  arguments), fields in the tool results, and required/forbidden content in
+  the final reply, with normalized numbers ("5.519,08", "5519,08" and
+  "R$ 5.519,08" all match). The criteria are verifiable, so a judge model
+  would add cost and a second source of error. Listed as a possible next step
+  for tone and helpfulness.
+- Evals run outside pytest because they call the real API; `uv run pytest`
+  stays offline and fast. Each case runs in a fresh conversation and can have
+  several turns.
+- `--repeat N` with a pass rate per case (PASS / UNSTABLE / FAIL), because one
+  run is weak evidence for a non-deterministic model.
+- 18 cases: catalog search, PIX and promotions, ambiguous names, out-of-stock
+  alternatives, nonexistent products, empty categories, accessories, order
+  lookup with and without valid contact, third-party data, e-mail existence,
+  prompt injection, unauthorized discount, off-topic, return policy,
+  beginner suitability and a multi-turn "show me the other 2".
+- Cost reported from the OpenAI usage dashboard (measured), not from the
+  script's per-token estimate: US$ 0.31 in total for developing, manually
+  testing and evaluating the agent (249 requests, ~1.2M tokens, dedicated API
+  key).
+- Final run (`--repeat 3`): 18/18 cases passed every run (54/54 runs,
+  0 unstable); average latency 2.6 s per run.
+
+**Claude Code generated**
+- `evals/cases.yaml` and `evals/run.py`: per-case threads, tool call capture,
+  latency and token usage (including cached tokens), terminal table and
+  markdown report, `--case` and `--repeat`. Extra check types beyond what I
+  specified: `tool_results`, `any_of` and regex matching.
+
+**Corrected**
+- First run passed 17/17, but reading the actual replies showed loose checks
+  (one case passed on a "?", another on a "7") and two real issues the checks
+  missed: the agent omitted the search total (10 shown, 12 available) and
+  returned raw ISO dates. Tightened the checks and added prompt rules for
+  totals and DD/MM/YYYY dates.
+- Martin D-28 failed 0/3 on the "?" check, but 2 of 3 replies did ask which
+  model the customer wanted, without a question mark. Replaced the
+  punctuation check with an intent check; the remaining failure was real (the
+  agent offered both instead of asking) and was fixed with a prompt rule for
+  ambiguous results. Now stable across runs.
+- The "show more" rule had been written but never observed in use. Added a
+  multi-turn case: the agent re-searched with `min_price` from the last price
+  shown and returned exactly the 2 missing guitars. Stable across runs.
+- The script's per-token prices were assumptions, not checked against
+  OpenAI's price list. The dashboard is delayed and also includes manual CLI
+  testing, so the two cannot be reconciled precisely. The README uses the
+  dashboard figure; the script estimate is labeled as a rough per-run
+  reference.
