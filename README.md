@@ -30,6 +30,14 @@ pytest
 
 Copy `.env.example` to `.env` and fill in the LLM settings (used from step 2 on).
 
+## Cost
+
+Total spent developing and evaluating the agent: US$ 0.31 (OpenAI usage dashboard,
+API key `emporio-da-musica-agent`, as of 2026-11-02: 249 requests, ~1.2M tokens).
+
+The per-run figure in `evals/results/*.md` is only an estimate from hand-set
+token prices in `evals/run.py`; the dashboard number above is the measured one.
+
 ## Known limitations
 
 - Brand/description mismatch detection is a heuristic tuned to this catalog: it

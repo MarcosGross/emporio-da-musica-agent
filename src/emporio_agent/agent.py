@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 from langchain.agents import create_agent
+from langchain.tools import ToolRuntime
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -15,9 +18,18 @@ from langgraph.graph.state import CompiledStateGraph
 
 from emporio_agent import tools as store_tools
 from emporio_agent.llm import get_chat_model
-from emporio_agent.prompts import build_system_prompt
+from emporio_agent.prompts import HUMAN_SUPPORT, build_system_prompt
 
 CHECKPOINT_DB = Path(__file__).resolve().parents[2] / "data" / "checkpoints.db"
+
+MAX_ORDER_LOOKUP_FAILURES = 3
+
+TOO_MANY_ATTEMPTS = {
+    "found": False,
+    "error": "too_many_attempts",
+    "message": "Too many failed order lookups in this conversation. Order data was not queried.",
+    "human_support": HUMAN_SUPPORT,
+}
 
 
 def _json(result: dict) -> str:
@@ -74,19 +86,75 @@ def get_product(name_or_id: str) -> str:
     return _json(store_tools.get_product(name_or_id))
 
 
+class OrderLookupLimiter:
+    """Counts failed order lookups per conversation (thread_id) and blocks after a limit.
+
+    Successes do not reset the count. A thread seen for the first time in this
+    process starts from the failures already in its checkpointed history, so
+    restarting the CLI with --thread does not reset the limit. The lock keeps
+    parallel tool calls from slipping past the limit.
+    """
+
+    def __init__(self, max_failures: int = MAX_ORDER_LOOKUP_FAILURES):
+        self.max_failures = max_failures
+        self._failures: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def lookup(self, thread_id: str, history: list[BaseMessage], order_id: str, contact: str) -> dict:
+        with self._lock:
+            if thread_id not in self._failures:
+                self._failures[thread_id] = _failed_lookups_in(history)
+            if self._failures[thread_id] >= self.max_failures:
+                return dict(TOO_MANY_ATTEMPTS)
+            result = store_tools.get_order_status(order_id, contact)
+            if not result["found"]:
+                self._failures[thread_id] += 1
+                remaining = self.max_failures - self._failures[thread_id]
+                result["attempts_remaining"] = remaining
+                if remaining == 0:
+                    # The model may stop calling the tool before seeing too_many_attempts,
+                    # so the last allowed failure already carries the human channel.
+                    result["human_support"] = HUMAN_SUPPORT
+            return result
+
+    def reset(self) -> None:
+        with self._lock:
+            self._failures.clear()
+
+
+def _failed_lookups_in(history: list[BaseMessage]) -> int:
+    failed = 0
+    for message in history:
+        if isinstance(message, ToolMessage) and message.name == "get_order_status":
+            try:
+                failed += json.loads(message.content).get("error") == store_tools.ORDER_NOT_FOUND["error"]
+            except (TypeError, ValueError):
+                continue
+    return failed
+
+
+ORDER_LOOKUPS = OrderLookupLimiter()
+
+
 @tool(parse_docstring=True)
-def get_order_status(order_id: str, contact: str) -> str:
+def get_order_status(order_id: str, contact: str, runtime: ToolRuntime) -> str:
     """Get the status of an order. Requires the order number AND the customer's contact.
 
     Only call it when the customer has given both; otherwise ask for what is
     missing. If `found` is false, the order id and contact do not match: say the
     order could not be located with those details, without guessing which is wrong.
+    Failures include `attempts_remaining`. If it is 0, or `error` is
+    "too_many_attempts", do not call this tool again in this conversation and do
+    not ask for new details: point the customer to the human support channel in
+    `human_support`.
 
     Args:
         order_id: Order number given by the customer.
         contact: E-mail or phone number registered on the order.
     """
-    return _json(store_tools.get_order_status(order_id, contact))
+    thread_id = str((runtime.config.get("configurable") or {}).get("thread_id", "default"))
+    history = runtime.state.get("messages", []) if runtime.state else []
+    return _json(ORDER_LOOKUPS.lookup(thread_id, history, order_id, contact))
 
 
 TOOLS = [list_categories, search_products, get_product, get_order_status]

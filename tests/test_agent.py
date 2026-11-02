@@ -3,7 +3,6 @@
 import json
 
 import pytest
-from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -14,18 +13,7 @@ from emporio_agent.cli import chat_turn
 from emporio_agent.prompts import build_system_prompt, load_policies
 
 
-class ScriptedModel(GenericFakeChatModel):
-    """Fake chat model that replays fixed messages and accepts bind_tools."""
-
-    def bind_tools(self, tools, **kwargs):
-        return self
-
-
-def scripted(*messages: AIMessage) -> ScriptedModel:
-    return ScriptedModel(messages=iter(messages))
-
-
-def search_then_answer() -> ScriptedModel:
+def search_then_answer(scripted):
     return scripted(
         AIMessage(content="", tool_calls=[{"name": "search_products", "id": "call_1",
                                            "args": {"category": "violões", "max_price": 500}}]),
@@ -53,7 +41,7 @@ def test_system_prompt_has_behaviour_rules():
 
 # --- agent --------------------------------------------------------------------
 
-def test_tools_are_registered_with_docstrings():
+def test_tools_are_registered_with_docstrings(scripted):
     agent = build_agent(model=scripted(AIMessage(content="oi")))
     registered = agent.nodes["tools"].bound.tools_by_name
     assert set(registered) == {"list_categories", "search_products", "get_product", "get_order_status"}
@@ -67,8 +55,8 @@ def test_search_products_doc_steers_instrument_type_to_category():
     assert set(schema["properties"]) == {"category", "max_price", "min_price", "query"}
 
 
-def test_agent_runs_tool_and_returns_answer():
-    agent = build_agent(model=search_then_answer(), checkpointer=InMemorySaver())
+def test_agent_runs_tool_and_returns_answer(scripted):
+    agent = build_agent(model=search_then_answer(scripted), checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "t1"}}
     result = agent.invoke({"messages": [("user", "violão até 500?")]}, config)
 
@@ -79,7 +67,7 @@ def test_agent_runs_tool_and_returns_answer():
     assert result["messages"][-1].content == "Achei 2 violões até R$ 500."
 
 
-def test_sqlite_checkpointer_persists_thread(tmp_path):
+def test_sqlite_checkpointer_persists_thread(tmp_path, scripted):
     db = tmp_path / "checkpoints.db"
     config = {"configurable": {"thread_id": "persist"}}
 
@@ -95,8 +83,8 @@ def test_sqlite_checkpointer_persists_thread(tmp_path):
     assert [m.content for m in history] == ["oi", "Olá!"]
 
 
-def test_chat_turn_debug_prints_tool_calls(capsys):
-    agent = build_agent(model=search_then_answer(), checkpointer=InMemorySaver())
+def test_chat_turn_debug_prints_tool_calls(capsys, scripted):
+    agent = build_agent(model=search_then_answer(scripted), checkpointer=InMemorySaver())
     reply = chat_turn(agent, {"configurable": {"thread_id": "t2"}}, "violão até 500?", debug=True)
 
     out = capsys.readouterr().out

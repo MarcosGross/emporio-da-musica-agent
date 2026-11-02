@@ -13,6 +13,15 @@ from emporio_agent.llm import LLMConfigError
 
 EXIT_WORDS = {"sair"}
 DEBUG_RESULT_CHARS = 300
+MAX_INPUT_CHARS = 1000
+
+
+def input_too_long(text: str) -> str | None:
+    """Warning for messages over MAX_INPUT_CHARS (they never reach the model), else None."""
+    if len(text) <= MAX_INPUT_CHARS:
+        return None
+    return (f"Sua mensagem tem {len(text)} caracteres; o limite é {MAX_INPUT_CHARS}. "
+            "Pode resumir e enviar de novo?")
 
 
 def _text(message: BaseMessage) -> str:
@@ -72,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         status = f"{len(history)} mensagens anteriores" if history else "nenhuma mensagem anterior, conversa nova"
         print(f"Retomando conversa {thread_id} ({status}).")
     else:
-        print(f"Conversa {thread_id} (retome com --thread {thread_id}).")
+        print(f"Conversa {thread_id} (retome com: uv run emporio-chat --thread {thread_id}).")
 
     while True:
         try:
@@ -84,6 +93,9 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if user_input.lower() in EXIT_WORDS:
             break
+        if (warning := input_too_long(user_input)) is not None:
+            print(warning)
+            continue
 
         try:
             reply = chat_turn(agent, config, user_input, args.debug)
@@ -95,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         print(f"\nAssistente: {reply}")
 
-    print(f"Até mais! Para retomar: emporio-chat --thread {thread_id}")
+    print(f"Até mais! Para retomar: uv run emporio-chat --thread {thread_id}")
     return 0
 
 
