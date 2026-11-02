@@ -191,6 +191,11 @@ def test_input_too_long_boundaries():
     "Em perguntas de adequação (é bom para iniciante? serve para palco? combina com tal estilo?)",
     "descrição (quando presente) e nas especificações",
     "Não invente avaliações",
+    'Quando uma busca retornar "total" maior que "returned", informe quantos produtos foram encontrados',
+    "ofereça mostrar mais opções ou refinar a busca",
+    "Escreva datas sempre no formato DD/MM/AAAA",
+    'Quando a consulta de produto retornar availability "ambiguous"',
+    "pergunte explicitamente qual deles o cliente procura, antes de dar preço ou detalhes",
 ])
 def test_system_prompt_contains_guardrail_rules(rule):
     assert rule in build_system_prompt(policies="(políticas)")
