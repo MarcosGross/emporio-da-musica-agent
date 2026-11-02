@@ -21,11 +21,13 @@ emporio-chat = "emporio_agent.cli:main"
 # Mirrors the "dev" dependency group so `pip install -e ".[dev]"` works without uv.
 dev = [
     "pytest>=8.0",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pyyaml>=6.0.3",
 ]
 
 [build-system]
