@@ -196,6 +196,17 @@ def test_input_too_long_boundaries():
     "Escreva datas sempre no formato DD/MM/AAAA",
     'Quando a consulta de produto retornar availability "ambiguous"',
     "pergunte explicitamente qual deles o cliente procura, antes de dar preço ou detalhes",
+    "Os dois podem chegar em mensagens diferentes",
+    "use os dados que o cliente já informou em qualquer mensagem anterior da conversa",
+    "nunca peça de novo o que já foi dado",
+    "Em políticas com prazo (devolução, troca, arrependimento)",
+    "não afirme que o cliente pode ou não pode antes de consultar o pedido",
+    "apresente a regra (prazo e condição) junto com o status e as datas registradas",
+    "o sistema não registra a data real de recebimento",
+    "Antes de consultar, não prometa confirmar se está no prazo",
+    "prometa só apresentar a regra e os dados do pedido",
+    "informe sempre a previsão de entrega, explicando que é a referência mais próxima do recebimento",
+    f"indique o atendimento humano ({HUMAN_SUPPORT}) para confirmar se ainda está no prazo",
 ])
 def test_system_prompt_contains_guardrail_rules(rule):
     assert rule in build_system_prompt(policies="(políticas)")
