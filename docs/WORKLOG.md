@@ -220,7 +220,7 @@ Branch: `feat/guardrails-evals`.
   testing and evaluating the agent (249 requests, ~1.2M tokens, dedicated API
   key).
 - Final run (`--repeat 3`): 18/18 cases passed every run (54/54 runs,
-  0 unstable); average latency 2.6 s per run.
+  0 unstable); average latency 2.6 s per run (superseded by the step 5a re-run).
 
 **Claude Code generated**
 - `evals/cases.yaml` and `evals/run.py`: per-case threads, tool call capture,
@@ -247,3 +247,51 @@ Branch: `feat/guardrails-evals`.
   testing, so the two cannot be reconciled precisely. The README uses the
   dashboard figure; the script estimate is labeled as a rough per-run
   reference.
+  
+## 2026-11-03 — Step 5a: recorded example conversations
+
+Branch: `docs/final-readme`.
+
+**Decided**
+- Five example conversations recorded with the real agent into `examples/`
+  (catalog, price, store info, return request, scope/injection), unedited, with
+  the tool calls of each turn in a collapsible block. Scripts live in
+  `scripts/conversations.yaml`; `examples/README.md` is the index.
+- Kept the snapshot assumption: no current date in the prompt. The data covers
+  Oct/2025–Mar/2026; with today's date the agent would judge every pending order
+  as late and every return window as expired, and evals would stop being
+  reproducible.
+- Stop criterion for prompt tuning: once `return_eligibility` passed 5/5, stop
+  changing the prompt and document any remaining instability instead of
+  chasing 100%.
+- Re-ran the full suite after the rule 4 and rule 14 changes: 18/19 cases
+  passed every run, 56/57 runs, 0 infrastructure errors. The one unstable case
+  is `taylor_110e_pix` (2/3): in one run the agent gave the PIX price without
+  the original price and discount percentage. Left as is and recorded here.
+  The new report replaces the previous one, renamed with `git mv` to its real
+  date (`evals/results/2026-11-03-gpt-5.4-mini-2026-03-17.md`); single-case work
+  runs were discarded.
+
+**Claude Code generated**
+- `scripts/record_conversations.py` (with `--only`), `scripts/conversations.yaml`,
+  `examples/`. Eval runner: per-turn checks (`turn_checks`), retries for API
+  connection errors and timeouts, and an ERROR status kept apart from FAIL.
+  New eval case `return_eligibility`.
+  The retry path was tested offline with a fake agent only; no connection
+  error occurred in the real runs.
+
+**Corrected**
+- Conversation 04 opened with "Pode sim" before knowing the order, and never
+  applied the return policy to it: the agent has no current date and the data
+  has no actual receipt date. Kept the snapshot assumption (no current date in
+  the prompt) and added a rule: state the policy with the recorded dates and
+  refer to human support to confirm eligibility. The new eval case then caught
+  another real bug: when the order number and the e-mail came in separate
+  messages, the agent sometimes asked for the order number again and never
+  called the tool. Fixed with a rule to reuse data already given. Network
+  errors are now reported as ERROR, separate from agent failures.
+- After that fix, 2 of 5 runs still left out the estimated delivery date, the
+  closest proxy for the receipt date the deadline counts from, and one
+  promised to confirm the deadline before looking up the order. Rule 14 now
+  requires the estimated delivery date and forbids promising a confirmation the
+  system cannot give; the check was not loosened. Result: 5/5.
