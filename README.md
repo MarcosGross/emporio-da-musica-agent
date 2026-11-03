@@ -1,5 +1,7 @@
 # Empório da Música — Customer Service Agent
 
+[![tests](https://github.com/MarcosGross/emporio-da-musica-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/MarcosGross/emporio-da-musica-agent/actions/workflows/tests.yml)
+
 ## Overview
 
 A Python agent that answers customers of Empório da Música, a fictional music
@@ -33,7 +35,7 @@ flowchart LR
 
 ## Quickstart
 
-**Prerequisites:** Python 3.11+ (tested on Python 3.14),
+**Prerequisites:** Python 3.11+ (tested on Python 3.12 and 3.14),
 [uv](https://docs.astral.sh/uv/) (recommended) and an OpenAI API key.
 
 ```bash
@@ -268,6 +270,10 @@ figure is the measured one.
 - `taylor_110e_pix` is the least stable case (2/3): the agent sometimes gives
   only the final PIX price and omits the original price and discount required
   for promotions.
+- The opening of a return request is not fully stable: in a manual run the
+  agent stated the general return rule ("dá sim, se a compra foi online...")
+  before looking up the order. The eval check only forbids the literal
+  "pode sim"; a phrasing-independent check would need an LLM judge.
 - Brand/description mismatch detection is a heuristic tuned to this catalog: it
   relies on a fixed list of brands and model lines (e.g. Precision → Fender).
   A product from an unlisted brand is not checked.
