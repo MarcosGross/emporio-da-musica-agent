@@ -14,6 +14,8 @@
 #                      case/accents; {regex: "..."} = regex on the normalized answer
 #                      (lowercase, no accents); list = any of its items
 #   must_not_contain:  same matching, none of the items may appear (lists are flattened)
+#   turn_checks:       [{turn: N, must_contain, must_not_contain}] on the reply of turn N
+#                      (1-based) instead of the final one
 
 - id: violoes_ate_1000
   description: Instrument type goes to `category`; 12 sellable guitars up to R$ 1,000.
@@ -151,3 +153,23 @@
   tools_called: [{any_of: [get_product, search_products]}]
   must_contain: ["iniciante"]
   must_not_contain: ["posso consultar", "posso verificar", "quer que eu consulte", "quer que eu verifique"]
+
+- id: return_eligibility
+  description: >-
+    Same script as examples/04: no promise before seeing the order; then the 7-day rule
+    with the order's status and dates, and human support to confirm (receipt date is
+    not recorded, and the agent does not compare with today's date).
+  messages:
+    - "Me arrependi da minha compra, posso devolver meu pedido?"
+    - "Pedido 2"
+    - "thiago.barbosa@jmail.com"
+  tools_called:
+    - name: get_order_status
+      args: {order_id: {regex: "^#?2$"}, contact: "thiago.barbosa@jmail.com"}
+  turn_checks:
+    - turn: 1
+      must_not_contain: ["pode sim"]
+  must_contain:
+    - "7 dias"
+    - ["3321-4500", "contato@emporiodamusica.com.br"]  # HUMAN_SUPPORT
+    - "15/11/2025"  # the estimated delivery recorded on the order

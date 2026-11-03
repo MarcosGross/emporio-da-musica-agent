@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+import httpx
+import openai
 import yaml
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -37,6 +39,11 @@ PRICES_PER_MILLION = {
 }
 PRICES_SOURCE = ("set by hand in evals/run.py from the assistant's own estimate; "
                  "NOT checked against the OpenAI pricing page")
+
+# API connection problems and timeouts are infrastructure, not agent behaviour: the run is
+# retried from scratch, and if it still fails it is reported as ERROR, apart from FAIL.
+INFRA_ERRORS = (openai.APIConnectionError, httpx.TransportError, TimeoutError)  # APITimeoutError included
+INFRA_RETRIES = 2
 
 EVALS_DIR = Path(__file__).resolve().parent
 CASES_FILE = EVALS_DIR / "cases.yaml"
@@ -112,19 +119,46 @@ class ToolCall:
 @dataclass
 class CaseResult:
     case: dict
-    answer: str = ""
+    answers: list[str] = field(default_factory=list)  # final reply of each turn
     tool_calls: list[ToolCall] = field(default_factory=list)
     checks: list[tuple[str, bool]] = field(default_factory=list)
     latency_s: float = 0.0
     tokens: dict = field(default_factory=lambda: {"input": 0, "cached_input": 0, "output": 0})
     error: str | None = None
+    infra_error: bool = False  # error is an API connection/timeout problem, not the agent
+    attempts: int = 1
+
+    @property
+    def status(self) -> str:
+        if self.infra_error:
+            return "ERROR"
+        return "PASS" if self.passed else "FAIL"
+
+    @property
+    def answer(self) -> str:
+        """Final reply of the last turn."""
+        return self.answers[-1] if self.answers else ""
 
     @property
     def passed(self) -> bool:
         return self.error is None and all(ok for _, ok in self.checks)
 
 
+def is_infra_error(exc: BaseException) -> bool:
+    return isinstance(exc, INFRA_ERRORS)
+
+
 def run_case(agent, case: dict) -> CaseResult:
+    """One run of a case; infrastructure errors are retried in a fresh thread."""
+    for attempt in range(1, INFRA_RETRIES + 2):
+        result = _run_once(agent, case)
+        result.attempts = attempt
+        if not result.infra_error:
+            break
+    return result
+
+
+def _run_once(agent, case: dict) -> CaseResult:
     result = CaseResult(case=case)
     config = {"configurable": {"thread_id": f"eval-{case['id']}-{uuid.uuid4().hex[:8]}"}}
     seen = 0
@@ -137,6 +171,7 @@ def run_case(agent, case: dict) -> CaseResult:
             _collect(result, new)
     except Exception as exc:  # one failing case must not stop the run
         result.error = f"{type(exc).__name__}: {exc}"
+        result.infra_error = is_infra_error(exc)
     result.latency_s = time.perf_counter() - start
     if result.error is None:
         result.checks = evaluate(case, result)
@@ -144,7 +179,9 @@ def run_case(agent, case: dict) -> CaseResult:
 
 
 def _collect(result: CaseResult, messages: list) -> None:
+    """Record one turn: tool calls/results, token usage and the turn's final reply."""
     by_id: dict[str, ToolCall] = {}
+    reply = ""
     for message in messages:
         if isinstance(message, AIMessage):
             for call in message.tool_calls:
@@ -157,12 +194,13 @@ def _collect(result: CaseResult, messages: list) -> None:
             result.tokens["cached_input"] += cached
             result.tokens["output"] += usage.get("output_tokens", 0) or 0
             if not message.tool_calls:
-                result.answer = message.text if isinstance(message.text, str) else message.text()
+                reply = message.text if isinstance(message.text, str) else message.text()
         elif isinstance(message, ToolMessage) and message.tool_call_id in by_id:
             try:
                 by_id[message.tool_call_id].result = json.loads(message.content)
             except (TypeError, ValueError):
                 by_id[message.tool_call_id].result = None
+    result.answers.append(reply)
 
 
 def evaluate(case: dict, result: CaseResult) -> list[tuple[str, bool]]:
@@ -189,13 +227,21 @@ def evaluate(case: dict, result: CaseResult) -> list[tuple[str, bool]]:
                  for c in calls)
         checks.append((f"{spec['tool']}.{spec['field']} == {spec['equals']}", ok))
 
-    for item in case.get("must_contain", []):
-        checks.append((f"contains {label(item)}", appears(item, result.answer)))
+    checks += text_checks(case, result.answer)
 
-    for item in case.get("must_not_contain", []):
+    for spec in case.get("turn_checks", []):
+        turn = spec["turn"]
+        answer = result.answers[turn - 1] if turn <= len(result.answers) else ""
+        checks += text_checks(spec, answer, prefix=f"turn {turn} ")
+
+    return checks
+
+
+def text_checks(spec: dict, answer: str, prefix: str = "") -> list[tuple[str, bool]]:
+    checks = [(f"{prefix}contains {label(item)}", appears(item, answer)) for item in spec.get("must_contain", [])]
+    for item in spec.get("must_not_contain", []):
         for single in item if isinstance(item, list) else [item]:
-            checks.append((f"does not contain {single}", not appears(single, result.answer)))
-
+            checks.append((f"{prefix}does not contain {single}", not appears(single, answer)))
     return checks
 
 
@@ -220,18 +266,35 @@ class CaseSummary:
     runs: list[CaseResult]
 
     @property
+    def agent_runs(self) -> list[CaseResult]:
+        """Runs that reached a verdict on the agent (infrastructure errors excluded)."""
+        return [r for r in self.runs if not r.infra_error]
+
+    @property
+    def errors(self) -> int:
+        return len(self.runs) - len(self.agent_runs)
+
+    @property
     def passes(self) -> int:
-        return sum(r.passed for r in self.runs)
+        return sum(r.passed for r in self.agent_runs)
 
     @property
     def status(self) -> str:
-        if self.passes == len(self.runs):
+        if not self.agent_runs:
+            return "ERROR"
+        if self.passes == len(self.agent_runs):
             return "PASS"
         return "FAIL" if self.passes == 0 else "UNSTABLE"
 
     @property
+    def score(self) -> str:
+        """e.g. "4/4 (+1 error)": passes over agent runs, errors shown apart."""
+        return f"{self.passes}/{len(self.agent_runs)}" + (f" (+{self.errors} error)" if self.errors else "")
+
+    @property
     def avg_latency_s(self) -> float:
-        return sum(r.latency_s for r in self.runs) / len(self.runs)
+        runs = self.agent_runs or self.runs
+        return sum(r.latency_s for r in runs) / len(runs)
 
     @property
     def avg_tokens(self) -> float:
@@ -240,35 +303,40 @@ class CaseSummary:
     def failed_checks(self) -> list[str]:
         """Each failing check (or error) with how many runs it failed in."""
         counts: dict[str, int] = {}
-        for run in self.runs:
+        for run in self.agent_runs:
             failures = [run.error] if run.error else [name for name, ok in run.checks if not ok]
             for name in failures:
                 counts[name] = counts.get(name, 0) + 1
-        return [f"{name} ({n}/{len(self.runs)})" for name, n in counts.items()]
+        return [f"{name} ({n}/{len(self.agent_runs)})" for name, n in counts.items()]
 
 
 def print_table(summaries: list[CaseSummary]) -> None:
     width = max(len(s.case["id"]) for s in summaries)
-    print(f"\n{'case'.ljust(width)}  passes  status    latency  tokens")
+    print(f"\n{'case'.ljust(width)}  passes  errors  status    latency  tokens")
     for s in summaries:
-        print(f"{s.case['id'].ljust(width)}  {s.passes:>2}/{len(s.runs):<3}  {s.status:<8}  "
+        print(f"{s.case['id'].ljust(width)}  {s.passes:>2}/{len(s.agent_runs):<3}  {s.errors:>6}  {s.status:<8}  "
               f"{s.avg_latency_s:6.1f}s  {s.avg_tokens:>6.0f}")
 
 
 def overall(summaries: list[CaseSummary], model: str) -> dict:
     runs = [r for s in summaries for r in s.runs]
-    checks = [ok for r in runs for _, ok in r.checks]
-    tokens = {k: sum(r.tokens[k] for r in runs) for k in ("input", "cached_input", "output")}
+    agent_runs = [r for s in summaries for r in s.agent_runs]
+    checks = [ok for r in agent_runs for _, ok in r.checks]
+    tokens = {k: sum(r.tokens[k] for r in runs) for k in ("input", "cached_input", "output")}  # all attempts cost
     return {
         "stable_cases": sum(s.status == "PASS" for s in summaries),
         "unstable_cases": sum(s.status == "UNSTABLE" for s in summaries),
         "failed_cases": sum(s.status == "FAIL" for s in summaries),
+        "error_cases": sum(s.status == "ERROR" for s in summaries),
         "cases": len(summaries),
-        "runs_passed": sum(r.passed for r in runs),
+        "runs_passed": sum(r.passed for r in agent_runs),
+        "agent_runs": len(agent_runs),
         "runs": len(runs),
+        "errors": len(runs) - len(agent_runs),
+        "retried_runs": sum(r.attempts > 1 for r in runs),
         "checks_passed": sum(checks),
         "checks": len(checks),
-        "avg_latency_s": sum(r.latency_s for r in runs) / len(runs),
+        "avg_latency_s": sum(r.latency_s for r in agent_runs or runs) / len(agent_runs or runs),
         "tokens": tokens,
         "cost_usd": estimate_cost(tokens, model),
     }
@@ -282,8 +350,14 @@ def _run_details(title: str, run: CaseResult) -> list[str]:
         lines.append("- tools: none")
     lines += [f"- {'✅' if ok else '❌'} {name}" for name, ok in run.checks]
     if run.error:
-        lines.append(f"- ❌ error: {run.error}")
-    lines += ["", "**Resposta final:**", "", *[f"> {line}" for line in (run.answer or "(vazia)").splitlines()], ""]
+        kind = "infrastructure error (not counted as agent failure)" if run.infra_error else "error"
+        lines.append(f"- ❌ {kind}: {run.error}")
+    if run.attempts > 1:
+        lines.append(f"- attempts: {run.attempts} (retried after API connection errors)")
+    for turn, answer in enumerate(run.answers or [""], start=1):
+        title = "**Resposta final:**" if len(run.answers) <= 1 else f"**Resposta (turno {turn}):**"
+        lines += ["", title, "", *[f"> {line}" for line in (answer or "(vazia)").splitlines()]]
+    lines.append("")
     return lines
 
 
@@ -307,8 +381,13 @@ def render_markdown(summaries: list[CaseSummary], settings: dict, stats: dict, r
         f"- Model: `{settings['provider']}/{settings['model']}` (reasoning effort: {settings['reasoning_effort']})",
         f"- Runs per case: {repeat}",
         f"- Cases passing every run: **{stats['stable_cases']}/{stats['cases']}** — "
-        f"unstable: {stats['unstable_cases']}, failing every run: {stats['failed_cases']}",
-        f"- Runs passed: {stats['runs_passed']}/{stats['runs']} ({stats['runs_passed'] / stats['runs']:.0%})",
+        f"unstable: {stats['unstable_cases']}, failing every run: {stats['failed_cases']}"
+        + (f", only errors: {stats['error_cases']}" if stats["error_cases"] else ""),
+        f"- Runs passed: {stats['runs_passed']}/{stats['agent_runs']} "
+        f"({stats['runs_passed'] / max(stats['agent_runs'], 1):.0%}), excluding infrastructure errors",
+        f"- Infrastructure errors (ERROR): {stats['errors']} of {stats['runs']} runs — API connection or "
+        f"timeout still failing after {INFRA_RETRIES} retries; not counted as agent failures. "
+        f"Runs retried at least once: {stats['retried_runs']}",
         f"- Checks passed: {stats['checks_passed']}/{stats['checks']} "
         f"({stats['checks_passed'] / max(stats['checks'], 1):.0%})",
         f"- Average latency per case run: {stats['avg_latency_s']:.1f}s",
@@ -320,25 +399,25 @@ def render_markdown(summaries: list[CaseSummary], settings: dict, stats: dict, r
         "",
         "## Results",
         "",
-        "| Case | Passes | Status | Avg latency | Avg tokens | Failed checks (runs) |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Case | Passes | Errors | Status | Avg latency | Avg tokens | Failed checks (runs) |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for s in summaries:
         status = s.status if s.status == "PASS" else f"**{s.status}**"
         failed = "; ".join(s.failed_checks()) or "—"
-        lines.append(f"| {s.case['id']} | {s.passes}/{len(s.runs)} | {status} | {s.avg_latency_s:.1f}s | "
-                     f"{s.avg_tokens:.0f} | {failed.replace('|', '/')} |")
+        lines.append(f"| {s.case['id']} | {s.passes}/{len(s.agent_runs)} | {s.errors} | {status} | "
+                     f"{s.avg_latency_s:.1f}s | {s.avg_tokens:.0f} | {failed.replace('|', '/')} |")
 
     lines += ["", "## Details", ""]
     for s in summaries:
-        lines += [f"### {s.case['id']} — {s.status} ({s.passes}/{len(s.runs)})", "",
+        lines += [f"### {s.case['id']} — {s.status} ({s.score})", "",
                   f"_{s.case.get('description', '')}_", ""]
         lines += [f"> **Cliente:** {m}" for m in s.case["messages"]]
         lines.append("")
         failing = [(i, r) for i, r in enumerate(s.runs, start=1) if not r.passed]
-        if failing:  # every failing run, so instability can be diagnosed
+        if failing:  # every failing or errored run, so instability can be diagnosed
             for i, run in failing:
-                lines += _run_details(f"Run {i} — FAIL", run)
+                lines += _run_details(f"Run {i} — {run.status}", run)
         else:
             lines += _run_details("Run 1 — PASS", s.runs[0])
     return "\n".join(lines)
@@ -391,7 +470,8 @@ def main(argv: list[str] | None = None) -> int:
     cost = "n/a" if stats["cost_usd"] is None else f"US$ {stats['cost_usd']:.4f} (estimate)"
     print(f"\n{stats['stable_cases']}/{stats['cases']} cases passed every run "
           f"({stats['unstable_cases']} unstable, {stats['failed_cases']} failing), "
-          f"{stats['runs_passed']}/{stats['runs']} runs, avg latency {stats['avg_latency_s']:.1f}s, cost {cost}")
+          f"{stats['runs_passed']}/{stats['agent_runs']} runs passed, {stats['errors']} infrastructure "
+          f"error(s) (not agent failures), avg latency {stats['avg_latency_s']:.1f}s, cost {cost}")
     print(f"Report: {path.relative_to(EVALS_DIR.parent)}")
     return 0 if stats["stable_cases"] == stats["cases"] else 1
 
