@@ -32,8 +32,8 @@ Copy `.env.example` to `.env` and fill in the LLM settings (used from step 2 on)
 
 ## Cost
 
-Total spent developing and evaluating the agent: US$ 0.31 (OpenAI usage dashboard,
-API key `emporio-da-musica-agent`, as of 2026-11-02: 249 requests, ~1.2M tokens).
+Total spent developing and evaluating the agent: US$ 0.50 (OpenAI usage dashboard,
+API key `emporio-da-musica-agent`, as of 2026-11-03: 379 requests, ~1.8M tokens).
 
 The per-run figure in `evals/results/*.md` is only an estimate from hand-set
 token prices in `evals/run.py`; the dashboard number above is the measured one.
@@ -48,3 +48,14 @@ token prices in `evals/run.py`; the dashboard number above is the measured one.
   4 strings, 142: "88 teclas" vs 61 keys).
 - Order totals are compared with current prices because there is no price
   history; mismatches are warnings, not errors.
+- taylor_110e_pix is the least stable case (2/3): the agent sometimes gives only
+  the final PIX price and omits the original price and discount required for
+  promotions.
+
+## With more time
+
+- Make the promotion display deterministic: have the tool return a ready-made
+  price text ("R$ 5.999,00 → R$ 5.519,08 (8% off)") so showing the original
+  price and discount no longer depends on the model. Not applied because any
+  prompt or tool change means re-running the full suite and re-recording the
+  examples, which did not fit the deadline.
